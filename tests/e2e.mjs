@@ -9,7 +9,10 @@ const BASE = process.env.BASE_URL || 'http://localhost:4173/';
 const SHOTS = process.argv[2];
 const ISBN = '9780140328721';
 
-const png = await bwipjs.toBuffer({ bcid: 'ean13', text: ISBN, scale: 4, height: 22, includetext: true, backgroundcolor: 'FFFFFF' });
+const png = await bwipjs.toBuffer({ bcid: 'ean13', text: ISBN, scale: 4, height: 22, includetext: true, backgroundcolor: 'FFFFFF', paddingwidth: 12, paddingheight: 6 });
+// 사진 인식용: 한글책 ISBN 바코드
+const KO_ISBN = '9788937460449';
+const koPng = await bwipjs.toBuffer({ bcid: 'ean13', text: KO_ISBN, scale: 3, height: 18, includetext: true, backgroundcolor: 'FFFFFF', paddingwidth: 12, paddingheight: 6 });
 const barcodeUrl = `data:image/png;base64,${png.toString('base64')}`;
 
 const browser = await chromium.launch();
@@ -174,6 +177,31 @@ await sheet.getByRole('button', { name: '읽어주기', exact: true }).click();
 await page.getByRole('button', { name: '기록 저장' }).click();
 await page.getByText('하윤 · 읽어주기 기록했습니다.').waitFor();
 step('바코드 없는 한글책 등록·읽어주기 기록');
+
+// 사진으로 인식: 카메라에 바코드가 안 보이는 상태에서 사진 파일로 인식
+await page.getByRole('button', { name: '바코드 스캔' }).click();
+{
+  const [chooser] = await Promise.all([page.waitForEvent('filechooser'), page.getByRole('button', { name: '📸 사진으로 인식' }).click()]);
+  await chooser.setFiles({ name: 'photo.png', mimeType: 'image/png', buffer: koPng });
+}
+await page.getByText('새 책 등록').waitFor({ timeout: 15000 });
+if ((await page.getByText(`ISBN ${KO_ISBN}`).count()) !== 1) throw new Error('사진 인식 ISBN 불일치');
+if ((await sheet.getByRole('button', { name: '한글책' }).getAttribute('aria-pressed')) !== 'true') throw new Error('978-89 책은 한글책 기본');
+await page.getByRole('button', { name: '닫기' }).click();
+step('사진으로 인식 → 한글책 기본 선택');
+
+// 바코드가 없는 사진 → 안내 후 다시 시도 가능
+await page.getByRole('button', { name: '바코드 스캔' }).click();
+const blank = Buffer.from('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8/5+hHgAHggJ/PchI7wAAAABJRU5ErkJggg==', 'base64');
+{
+  const [chooser] = await Promise.all([page.waitForEvent('filechooser'), page.getByRole('button', { name: '📸 사진으로 인식' }).click()]);
+  await chooser.setFiles({ name: 'blank.png', mimeType: 'image/png', buffer: blank });
+}
+await page.getByText('사진에서 바코드를 찾지 못했습니다').waitFor();
+await page.getByRole('button', { name: '실시간 스캔 다시 켜기' }).waitFor();
+await shot('08-scanner-photo-retry');
+await page.getByRole('button', { name: '닫기' }).click();
+step('바코드 없는 사진 안내');
 
 // 새로고침 후에도 데이터 유지
 await page.reload();

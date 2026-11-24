@@ -582,9 +582,9 @@ textarea {
 .scanner .frame {
   position: absolute;
   left: 50%;
-  top: 40%;
-  width: min(80vw, 360px);
-  height: min(36vw, 160px);
+  top: 38%;
+  width: min(92vw, 560px);
+  height: min(52vw, 300px);
   transform: translate(-50%, -50%);
   border: 3px solid rgba(255, 255, 255, 0.9);
   border-radius: 14px;
@@ -605,10 +605,10 @@ textarea {
 @keyframes scanline {
   0%,
   100% {
-    transform: translateY(-50px);
+    transform: translateY(-90px);
   }
   50% {
-    transform: translateY(50px);
+    transform: translateY(90px);
   }
 }
 
@@ -642,9 +642,54 @@ textarea {
   background: rgba(0, 0, 0, 0.4);
 }
 
+.scanner .tools {
+  display: flex;
+  gap: 8px;
+  justify-content: center;
+  flex-wrap: wrap;
+  margin-bottom: 12px;
+}
+
+.scanner .tool {
+  min-height: 44px;
+  padding: 0 14px;
+  border-radius: 999px;
+  border: 1px solid rgba(255, 255, 255, 0.5);
+  background: rgba(0, 0, 0, 0.45);
+  color: #fff;
+  font-weight: 700;
+  cursor: pointer;
+}
+
+.scanner .tool[aria-pressed='true'] {
+  background: #fff;
+  color: #111;
+}
+
+.scanner .tool.primary {
+  background: #fff;
+  color: #111;
+  border-color: #fff;
+}
+
+.scanner .paused {
+  position: absolute;
+  inset: 0;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 12px;
+}
+
 .scanner .manual {
   display: flex;
   gap: 8px;
+}
+
+.scanner .manual .btn {
+  flex: none;
+  white-space: nowrap;
 }
 
 .scanner .manual .input {

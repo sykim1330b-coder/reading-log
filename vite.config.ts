@@ -32,7 +32,9 @@ export default defineConfig({
         ],
       },
       workbox: {
-        globPatterns: ['**/*.{js,css,html,svg,png,woff2}'],
+        globPatterns: ['**/*.{js,css,html,svg,png,woff2,wasm}'],
+        // 바코드 인식용 wasm(약 1MB)도 미리 받아 두어 오프라인에서도 스캔되게 합니다.
+        maximumFileSizeToCacheInBytes: 4 * 1024 * 1024,
       },
     }),
   ],

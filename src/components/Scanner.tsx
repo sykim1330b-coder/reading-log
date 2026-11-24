@@ -1,104 +1,261 @@
 import { useEffect, useRef, useState } from 'react';
-import { BrowserMultiFormatReader, type IScannerControls } from '@zxing/browser';
-import { BarcodeFormat, DecodeHintType } from '@zxing/library';
+import { detectInPhoto, getDetector } from '../lib/barcode';
 import { normalizeIsbn } from '../lib/isbn';
 import { useFlow } from '../flow';
 
-export function createIsbnReader() {
-  const hints = new Map();
-  hints.set(DecodeHintType.POSSIBLE_FORMATS, [BarcodeFormat.EAN_13]);
-  hints.set(DecodeHintType.TRY_HARDER, true);
-  return new BrowserMultiFormatReader(hints, { delayBetweenScanAttempts: 120 });
+interface ExtraCapabilities {
+  zoom?: { min: number; max: number; step?: number };
+  torch?: boolean;
+  focusMode?: string[];
 }
 
 function cameraErrorMessage(e: unknown): string {
   const name = (e as Error)?.name;
   if (name === 'NotAllowedError' || name === 'SecurityError') {
-    return '카메라 권한이 거부되었습니다. 브라우저 설정에서 카메라를 허용하거나, 아래에 ISBN을 직접 입력하세요.';
+    return '카메라 권한이 거부되었습니다. 브라우저 설정에서 카메라를 허용하거나, 사진으로 인식 또는 ISBN 직접 입력을 이용하세요.';
   }
   if (name === 'NotFoundError' || name === 'OverconstrainedError') {
-    return '사용할 수 있는 카메라가 없습니다. ISBN을 직접 입력하세요.';
+    return '사용할 수 있는 카메라가 없습니다. 사진으로 인식하거나 ISBN을 직접 입력하세요.';
   }
-  if (!window.isSecureContext) {
-    return '카메라는 https 주소에서만 사용할 수 있습니다.';
-  }
-  return '카메라를 시작하지 못했습니다. ISBN을 직접 입력하세요.';
+  if (!window.isSecureContext) return '카메라는 https 주소에서만 사용할 수 있습니다.';
+  return '카메라를 시작하지 못했습니다. 사진으로 인식하거나 ISBN을 직접 입력하세요.';
 }
+
+const SCAN_INTERVAL_MS = 60;
 
 export function Scanner() {
   const { close, handleIsbn, newBook, toast } = useFlow();
   const videoRef = useRef<HTMLVideoElement>(null);
-  const controlsRef = useRef<IScannerControls | null>(null);
+  const trackRef = useRef<MediaStreamTrack | null>(null);
+  const photoRef = useRef<HTMLInputElement>(null);
   const doneRef = useRef(false);
+
+  const [camOn, setCamOn] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [manual, setManual] = useState('');
+  const [busy, setBusy] = useState(false);
+  const [zoom, setZoom] = useState<{ min: number; max: number; on: boolean } | null>(null);
+  const [torch, setTorch] = useState<{ on: boolean } | null>(null);
 
+  const finish = (isbn: string) => {
+    if (doneRef.current) return;
+    doneRef.current = true;
+    navigator.vibrate?.(60);
+    trackRef.current?.stop();
+    handleIsbn(isbn);
+  };
+
+  // 실시간 스캔
   useEffect(() => {
-    let cancelled = false;
-    const reader = createIsbnReader();
+    if (!camOn) return;
+    let stopped = false;
+    let timer: number | undefined;
+    let stream: MediaStream | null = null;
     const lastBad = { code: '', at: 0 };
+    const canvas = document.createElement('canvas');
+    const ctx = canvas.getContext('2d', { willReadFrequently: true })!;
+    let frame = 0;
 
-    reader
-      .decodeFromConstraints(
-        { video: { facingMode: { ideal: 'environment' }, width: { ideal: 1280 }, height: { ideal: 720 } }, audio: false },
-        videoRef.current!,
-        (result) => {
-          if (!result || doneRef.current) return;
-          const text = result.getText();
-          const isbn = normalizeIsbn(text);
-          if (!isbn) {
-            // ISBN이 아닌 EAN-13(가격 바코드 등)은 무시하고 안내만 합니다.
-            if (lastBad.code !== text || Date.now() - lastBad.at > 3000) {
-              toast('책 ISBN 바코드가 아닙니다. 978/979로 시작하는 바코드를 비춰주세요.');
-              lastBad.code = text;
-              lastBad.at = Date.now();
+    (async () => {
+      try {
+        const [s, detector] = await Promise.all([
+          navigator.mediaDevices.getUserMedia({
+            video: { facingMode: { ideal: 'environment' }, width: { ideal: 1920 }, height: { ideal: 1080 } },
+            audio: false,
+          }),
+          getDetector(),
+        ]);
+        stream = s;
+        if (stopped) {
+          s.getTracks().forEach((t) => t.stop());
+          return;
+        }
+        const track = s.getVideoTracks()[0];
+        trackRef.current = track;
+        const caps = (track.getCapabilities?.() ?? {}) as ExtraCapabilities;
+        if (caps.focusMode?.includes('continuous')) {
+          track.applyConstraints({ advanced: [{ focusMode: 'continuous' } as MediaTrackConstraintSet] }).catch(() => {});
+        }
+        if (caps.zoom && caps.zoom.max >= 1.5) setZoom({ min: caps.zoom.min, max: caps.zoom.max, on: false });
+        if (caps.torch) setTorch({ on: false });
+
+        const video = videoRef.current!;
+        video.srcObject = s;
+        await video.play().catch(() => {});
+
+        const tick = async () => {
+          if (stopped || doneRef.current) return;
+          const vw = video.videoWidth;
+          const vh = video.videoHeight;
+          if (vw && vh && video.readyState >= 2) {
+            // 대부분은 가운데 넓은 영역만, 세 번에 한 번은 화면 전체를 봅니다.
+            const full = frame++ % 3 === 2;
+            const sx = full ? 0 : vw * 0.04;
+            const sy = full ? 0 : vh * 0.2;
+            const sw = full ? vw : vw * 0.92;
+            const sh = full ? vh : vh * 0.6;
+            canvas.width = Math.round(sw);
+            canvas.height = Math.round(sh);
+            ctx.drawImage(video, sx, sy, sw, sh, 0, 0, canvas.width, canvas.height);
+            try {
+              for (const code of await detector.detect(canvas)) {
+                const isbn = normalizeIsbn(code);
+                if (isbn) return finish(isbn);
+                if (lastBad.code !== code || Date.now() - lastBad.at > 3000) {
+                  toast('책 ISBN 바코드가 아닙니다. 978/979로 시작하는 바코드를 비춰주세요.');
+                  lastBad.code = code;
+                  lastBad.at = Date.now();
+                }
+              }
+            } catch {
+              // 한 프레임 실패는 무시하고 계속합니다.
             }
-            return;
           }
-          doneRef.current = true;
-          navigator.vibrate?.(60);
-          controlsRef.current?.stop();
-          handleIsbn(isbn);
-        },
-      )
-      .then((controls) => {
-        if (cancelled) controls.stop();
-        else controlsRef.current = controls;
-      })
-      .catch((e) => {
-        if (!cancelled) setError(cameraErrorMessage(e));
-      });
+          timer = window.setTimeout(tick, SCAN_INTERVAL_MS);
+        };
+        tick();
+      } catch (e) {
+        if (!stopped) setError(cameraErrorMessage(e));
+      }
+    })();
 
     return () => {
-      cancelled = true;
-      controlsRef.current?.stop();
+      stopped = true;
+      window.clearTimeout(timer);
+      stream?.getTracks().forEach((t) => t.stop());
+      trackRef.current = null;
     };
-  }, [handleIsbn, toast]);
+  }, [camOn]);
+
+  // 사진 촬영을 취소하면(지원하는 브라우저) 실시간 스캔을 다시 켭니다.
+  useEffect(() => {
+    const input = photoRef.current;
+    const onCancel = () => setCamOn(true);
+    input?.addEventListener('cancel', onCancel);
+    return () => input?.removeEventListener('cancel', onCancel);
+  }, []);
+
+  const toggleZoom = () => {
+    if (!zoom || !trackRef.current) return;
+    const on = !zoom.on;
+    const value = on ? Math.min(2, zoom.max) : Math.max(1, zoom.min);
+    trackRef.current
+      .applyConstraints({ advanced: [{ zoom: value } as MediaTrackConstraintSet] })
+      .then(() => setZoom({ ...zoom, on }))
+      .catch(() => toast('이 폰에서는 확대를 쓸 수 없습니다.'));
+  };
+
+  const toggleTorch = () => {
+    if (!torch || !trackRef.current) return;
+    const on = !torch.on;
+    trackRef.current
+      .applyConstraints({ advanced: [{ torch: on } as MediaTrackConstraintSet] })
+      .then(() => setTorch({ on }))
+      .catch(() => toast('이 폰에서는 플래시를 쓸 수 없습니다.'));
+  };
+
+  const openPhoto = () => {
+    // 일부 폰(특히 iPhone)은 카메라를 동시에 쓸 수 없으므로 실시간 스캔을 멈춥니다.
+    setCamOn(false);
+    photoRef.current?.click();
+  };
+
+  const onPhoto = async (file?: File) => {
+    if (photoRef.current) photoRef.current.value = '';
+    if (!file) {
+      setCamOn(true);
+      return;
+    }
+    setBusy(true);
+    try {
+      const codes = await detectInPhoto(file);
+      const isbn = codes.map(normalizeIsbn).find(Boolean);
+      if (isbn) return finish(isbn);
+      toast(
+        codes.length
+          ? '책 ISBN 바코드가 아닙니다. 978/979로 시작하는 바코드를 찍어주세요.'
+          : '사진에서 바코드를 찾지 못했습니다. 바코드가 크고 선명하게 나오도록 다시 찍어주세요.',
+      );
+    } catch {
+      toast('사진을 읽지 못했습니다. 다시 찍어주세요.');
+    } finally {
+      setBusy(false);
+    }
+  };
 
   const submitManual = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!manual.trim()) return;
-    controlsRef.current?.stop();
-    const ok = await handleIsbn(manual);
-    if (!ok) setManual('');
+    const isbn = normalizeIsbn(manual);
+    if (isbn) return finish(isbn);
+    await handleIsbn(manual); // 잘못된 값이면 안내 메시지를 띄웁니다.
+    setManual('');
   };
 
   return (
     <div className="scanner" role="dialog" aria-label="바코드 스캔">
-      <video ref={videoRef} playsInline muted autoPlay />
-      {!error && <div className="frame" aria-hidden />}
+      {camOn && <video ref={videoRef} playsInline muted autoPlay />}
+      {camOn && !error && <div className="frame" aria-hidden />}
       <div className="top">
         <strong>책 바코드 스캔</strong>
         <button type="button" className="icon-btn" aria-label="닫기" onClick={close}>
           ✕
         </button>
       </div>
+
+      {!camOn && (
+        <div className="paused">
+          {busy ? (
+            <>
+              <div className="spinner" />
+              <div>사진에서 바코드를 찾는 중…</div>
+            </>
+          ) : (
+            <button type="button" className="btn" onClick={() => setCamOn(true)}>
+              실시간 스캔 다시 켜기
+            </button>
+          )}
+        </div>
+      )}
+
       <div className="bottom">
         {error ? (
           <div className="error">{error}</div>
         ) : (
-          <div className="hint">책 뒷면의 ISBN 바코드를 네모 안에 맞춰주세요</div>
+          camOn && (
+            <div className="hint">
+              바코드를 네모 안에 <b>가로로 크게</b> 비춰주세요.
+              <br />
+              <span className="small">흐리게 보이면 책을 조금 멀리(15~20cm) 두세요.</span>
+            </div>
+          )
         )}
+
+        <div className="tools">
+          {zoom && camOn && (
+            <button type="button" className="tool" aria-pressed={zoom.on} onClick={toggleZoom}>
+              🔍 {zoom.on ? '2배 끄기' : '2배 확대'}
+            </button>
+          )}
+          {torch && camOn && (
+            <button type="button" className="tool" aria-pressed={torch.on} onClick={toggleTorch}>
+              🔦 플래시
+            </button>
+          )}
+          <button type="button" className="tool primary" onClick={openPhoto} disabled={busy}>
+            📸 사진으로 인식
+          </button>
+        </div>
+        <input
+          ref={photoRef}
+          type="file"
+          accept="image/*"
+          capture="environment"
+          hidden
+          aria-label="바코드 사진"
+          onChange={(e) => onPhoto(e.target.files?.[0])}
+        />
+
         <form className="manual" onSubmit={submitManual}>
           <input
             className="input"
@@ -112,12 +269,7 @@ export function Scanner() {
             확인
           </button>
         </form>
-        <button
-          type="button"
-          className="btn ghost block"
-          style={{ color: '#fff', marginTop: 8 }}
-          onClick={() => newBook()}
-        >
+        <button type="button" className="btn ghost block" style={{ color: '#fff', marginTop: 8 }} onClick={() => newBook()}>
           바코드 없는 책·DVD·음원 직접 등록
         </button>
       </div>
