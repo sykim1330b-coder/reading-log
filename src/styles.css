@@ -769,3 +769,27 @@ hr.sep {
   border-top: 1px solid var(--border);
   margin: 16px 0;
 }
+
+.scanner .top > div {
+  flex: 1;
+  min-width: 0;
+}
+
+.scanner .top .icon-btn {
+  flex: none;
+}
+
+.scanner .cam-info {
+  font-size: 11px;
+  opacity: 0.75;
+  margin-top: 2px;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+/* 스캐너가 열려 있으면 버튼을 가리지 않도록 안내 메시지를 위쪽에 띄웁니다. */
+.scanner ~ .toast {
+  bottom: auto;
+  top: calc(64px + env(safe-area-inset-top));
+}

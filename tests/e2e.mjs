@@ -24,7 +24,14 @@ page.on('console', (m) => m.type() === 'error' && errors.push(m.text()));
 
 // 가짜 카메라: 캔버스에 바코드를 그린 스트림을 돌려줍니다.
 await page.addInitScript((src) => {
-  navigator.mediaDevices.getUserMedia = async () => {
+  window.__gumCalls = [];
+  navigator.mediaDevices.enumerateDevices = async () => [
+    { kind: 'videoinput', deviceId: 'cam-a', label: 'camera2 0, facing back', groupId: '' },
+    { kind: 'videoinput', deviceId: 'cam-b', label: 'camera2 2, facing back', groupId: '' },
+    { kind: 'videoinput', deviceId: 'cam-f', label: 'camera2 1, facing front', groupId: '' },
+  ];
+  navigator.mediaDevices.getUserMedia = async (constraints) => {
+    window.__gumCalls.push(constraints);
     const img = new Image();
     img.src = src;
     await img.decode();
@@ -218,6 +225,26 @@ await page.getByLabel('ISBN 직접 입력').fill('1234567890123');
 await page.getByRole('button', { name: '확인' }).click();
 await page.getByText('올바른 ISBN이 아닙니다').waitFor();
 step('잘못된 ISBN 안내');
+
+// 카메라: 4K부터 요청, 해상도 표시, 카메라 전환과 기억
+await page.getByRole('button', { name: '닫기' }).click({ timeout: 5000 });
+await page.evaluate(() => (window.__gumCalls = []));
+await page.getByRole('button', { name: '바코드 스캔' }).click();
+await page.getByText(/1280×720 · /).waitFor();
+const first = await page.evaluate(() => window.__gumCalls[0]);
+if (first.video.width.ideal !== 3840) throw new Error('4K를 먼저 요청해야 함: ' + JSON.stringify(first));
+await page.getByRole('button', { name: '🔄 카메라 전환' }).click();
+await page.waitForFunction(() => window.__gumCalls.some((c) => c.video.deviceId?.exact));
+const switched = await page.evaluate(() => window.__gumCalls.at(-1).video.deviceId.exact);
+await page.getByRole('button', { name: '닫기' }).click();
+await page.evaluate(() => (window.__gumCalls = []));
+await page.getByRole('button', { name: '바코드 스캔' }).click();
+await page.getByText(/1280×720 · /).waitFor();
+const remembered = await page.evaluate(() => window.__gumCalls[0].video.deviceId?.exact);
+if (!switched || remembered !== switched) throw new Error(`카메라 기억 실패: ${switched} → ${remembered}`);
+await shot('09-scanner-tools');
+await page.getByRole('button', { name: '닫기' }).click();
+step(`4K 우선 요청·해상도 표시·카메라 전환(${switched}) 기억`);
 
 if (errors.length) throw new Error('콘솔 오류:\n' + errors.join('\n'));
 console.log('ALL PASSED');

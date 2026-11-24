@@ -1,5 +1,6 @@
 import { useEffect, useRef, useState } from 'react';
 import { detectInPhoto, getDetector } from '../lib/barcode';
+import { listBackCameras, openCamera, saveDeviceId, savedDeviceId, shortLabel, type CameraInfo } from '../lib/camera';
 import { normalizeIsbn } from '../lib/isbn';
 import { useFlow } from '../flow';
 
@@ -22,6 +23,14 @@ function cameraErrorMessage(e: unknown): string {
 }
 
 const SCAN_INTERVAL_MS = 60;
+/** 인식에 넘기는 이미지의 최대 가로 크기. 4K 영상도 이 크기로 줄여 처리 속도를 유지합니다. */
+const MAX_DECODE_WIDTH = 1920;
+
+interface ImageCaptureLike {
+  takePhoto(): Promise<Blob>;
+}
+const ImageCaptureCtor = (globalThis as unknown as { ImageCapture?: new (t: MediaStreamTrack) => ImageCaptureLike })
+  .ImageCapture;
 
 export function Scanner() {
   const { close, handleIsbn, newBook, toast } = useFlow();
@@ -36,6 +45,9 @@ export function Scanner() {
   const [busy, setBusy] = useState(false);
   const [zoom, setZoom] = useState<{ min: number; max: number; on: boolean } | null>(null);
   const [torch, setTorch] = useState<{ on: boolean } | null>(null);
+  const [deviceId, setDeviceId] = useState<string | undefined>(savedDeviceId);
+  const [cameras, setCameras] = useState<CameraInfo[]>([]);
+  const [info, setInfo] = useState('');
 
   const finish = (isbn: string) => {
     if (doneRef.current) return;
@@ -59,9 +71,11 @@ export function Scanner() {
     (async () => {
       try {
         const [s, detector] = await Promise.all([
-          navigator.mediaDevices.getUserMedia({
-            video: { facingMode: { ideal: 'environment' }, width: { ideal: 1920 }, height: { ideal: 1080 } },
-            audio: false,
+          // 기억해 둔 카메라가 없어졌으면 기본 뒷면 카메라로 엽니다.
+          openCamera(deviceId).catch((e) => {
+            if (!deviceId || (e as Error).name === 'NotAllowedError') throw e;
+            saveDeviceId(undefined);
+            return openCamera();
           }),
           getDetector(),
         ]);
@@ -78,6 +92,15 @@ export function Scanner() {
         }
         if (caps.zoom && caps.zoom.max >= 1.5) setZoom({ min: caps.zoom.min, max: caps.zoom.max, on: false });
         if (caps.torch) setTorch({ on: false });
+        const settings = track.getSettings();
+        setInfo(
+          `${settings.width ?? '?'}×${settings.height ?? '?'} · ${shortLabel(track.label) || '카메라'} · ${
+            detector.engine === 'native' ? '내장 인식기' : 'zxing'
+          }`,
+        );
+        listBackCameras()
+          .then((list) => !stopped && setCameras(list))
+          .catch(() => {});
 
         const video = videoRef.current!;
         video.srcObject = s;
@@ -94,8 +117,9 @@ export function Scanner() {
             const sy = full ? 0 : vh * 0.2;
             const sw = full ? vw : vw * 0.92;
             const sh = full ? vh : vh * 0.6;
-            canvas.width = Math.round(sw);
-            canvas.height = Math.round(sh);
+            const scale = Math.min(1, MAX_DECODE_WIDTH / sw);
+            canvas.width = Math.round(sw * scale);
+            canvas.height = Math.round(sh * scale);
             ctx.drawImage(video, sx, sy, sw, sh, 0, 0, canvas.width, canvas.height);
             try {
               for (const code of await detector.detect(canvas)) {
@@ -125,7 +149,7 @@ export function Scanner() {
       stream?.getTracks().forEach((t) => t.stop());
       trackRef.current = null;
     };
-  }, [camOn]);
+  }, [camOn, deviceId]);
 
   // 사진 촬영을 취소하면(지원하는 브라우저) 실시간 스캔을 다시 켭니다.
   useEffect(() => {
@@ -134,6 +158,34 @@ export function Scanner() {
     input?.addEventListener('cancel', onCancel);
     return () => input?.removeEventListener('cancel', onCancel);
   }, []);
+
+  const switchCamera = () => {
+    if (cameras.length < 2) return;
+    const current = trackRef.current?.getSettings().deviceId ?? deviceId;
+    const idx = cameras.findIndex((c) => c.deviceId === current);
+    const next = cameras[(idx + 1) % cameras.length];
+    saveDeviceId(next.deviceId);
+    setZoom(null);
+    setTorch(null);
+    setDeviceId(next.deviceId);
+  };
+
+  /** Android Chrome: 화면을 떠나지 않고 카메라 최대 화질로 한 장 찍어 인식합니다. */
+  const snapHighRes = async () => {
+    const track = trackRef.current;
+    if (!track || !ImageCaptureCtor) return;
+    setBusy(true);
+    try {
+      const blob = await new ImageCaptureCtor(track).takePhoto();
+      const isbn = (await detectInPhoto(blob)).map(normalizeIsbn).find(Boolean);
+      if (isbn) return finish(isbn);
+      toast('바코드를 찾지 못했습니다. 바코드가 선명하게 보일 때 다시 눌러주세요.');
+    } catch {
+      toast('고화질 촬영을 지원하지 않습니다. 사진으로 인식을 이용하세요.');
+    } finally {
+      setBusy(false);
+    }
+  };
 
   const toggleZoom = () => {
     if (!zoom || !trackRef.current) return;
@@ -197,7 +249,10 @@ export function Scanner() {
       {camOn && <video ref={videoRef} playsInline muted autoPlay />}
       {camOn && !error && <div className="frame" aria-hidden />}
       <div className="top">
-        <strong>책 바코드 스캔</strong>
+        <div>
+          <strong>책 바코드 스캔</strong>
+          {info && camOn && <div className="cam-info">{info}</div>}
+        </div>
         <button type="button" className="icon-btn" aria-label="닫기" onClick={close}>
           ✕
         </button>
@@ -240,6 +295,16 @@ export function Scanner() {
           {torch && camOn && (
             <button type="button" className="tool" aria-pressed={torch.on} onClick={toggleTorch}>
               🔦 플래시
+            </button>
+          )}
+          {cameras.length > 1 && camOn && (
+            <button type="button" className="tool" onClick={switchCamera}>
+              🔄 카메라 전환
+            </button>
+          )}
+          {ImageCaptureCtor && camOn && !error && (
+            <button type="button" className="tool" onClick={snapHighRes} disabled={busy}>
+              {busy ? '찾는 중…' : '⚡ 고화질 찰칵'}
             </button>
           )}
           <button type="button" className="tool primary" onClick={openPhoto} disabled={busy}>
