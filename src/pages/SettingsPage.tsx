@@ -5,6 +5,7 @@ import { exportBackup, parseBackup, restoreBackup } from '../lib/backup';
 import { deleteChild } from '../lib/repo';
 import type { Child } from '../lib/types';
 import { ChildEditor, gradeText } from '../components/ChildEditor';
+import { KeySettings } from '../components/KeySettings';
 import { useFlow } from '../flow';
 import { useKids } from '../hooks';
 
@@ -17,14 +18,8 @@ export function SettingsPage() {
     logs: await db.logs.count(),
   }));
   const lastBackup = useLiveQuery(() => db.settings.get(SETTING.lastBackupAt), []);
-  const lookupSetting = useLiveQuery(() => db.settings.get(SETTING.lookupUrl), []);
-  const [lookupUrl, setLookupUrl] = useState('');
   const [persisted, setPersisted] = useState<boolean | null>(null);
   const fileRef = useRef<HTMLInputElement>(null);
-
-  useEffect(() => {
-    setLookupUrl((lookupSetting?.value as string) ?? '');
-  }, [lookupSetting]);
 
   useEffect(() => {
     navigator.storage?.persisted?.().then(setPersisted).catch(() => setPersisted(null));
@@ -56,16 +51,6 @@ export function SettingsPage() {
     } finally {
       if (fileRef.current) fileRef.current.value = '';
     }
-  };
-
-  const saveLookup = async () => {
-    const v = lookupUrl.trim().replace(/\/+$/, '');
-    if (v && !/^https:\/\//.test(v)) {
-      toast('https:// 로 시작하는 주소를 입력하세요.');
-      return;
-    }
-    await setSetting(SETTING.lookupUrl, v);
-    toast(v ? '조회 서버를 저장했습니다.' : '조회 서버를 사용하지 않습니다.');
   };
 
   const requestPersist = async () => {
@@ -150,25 +135,7 @@ export function SettingsPage() {
 
       <hr className="sep" />
 
-      <section className="section stack">
-        <h2 className="section-title">책 정보 조회 서버 (선택)</h2>
-        <p className="small muted" style={{ margin: 0 }}>
-          비워두면 Google Books·Open Library에서 찾습니다(영어책 위주). 한글책을 잘 찾으려면 국립중앙도서관·카카오 조회 서버(README
-          참고)를 배포한 뒤 주소를 넣으세요.
-        </p>
-        <input
-          className="input"
-          type="url"
-          inputMode="url"
-          placeholder="https://book-lookup.이름.workers.dev"
-          value={lookupUrl}
-          onChange={(e) => setLookupUrl(e.target.value)}
-          aria-label="조회 서버 주소"
-        />
-        <button type="button" className="btn" onClick={saveLookup}>
-          저장
-        </button>
-      </section>
+      <KeySettings />
 
       <p className="small muted" style={{ textAlign: 'center', marginTop: 32 }}>
         우리집 독서기록 v{__APP_VERSION__}

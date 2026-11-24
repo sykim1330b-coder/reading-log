@@ -92,6 +92,21 @@ export function BookFormSheet({ draft, thenLog, notice }: { draft: Book; thenLog
 
         <div className="stack">
           {notice && <div className="banner">{notice}</div>}
+          {isNew && book.isbn && !draft.title && (
+            <div className="row wrap">
+              <a
+                className="btn sm"
+                href={`https://search.naver.com/search.naver?query=${book.isbn}`}
+                target="_blank"
+                rel="noopener"
+              >
+                🔎 네이버에서 ISBN 검색 ↗
+              </a>
+              <a className="btn sm" href={`https://www.google.com/search?q=isbn+${book.isbn}`} target="_blank" rel="noopener">
+                🔎 구글 검색 ↗
+              </a>
+            </div>
+          )}
 
           <div className="row" style={{ alignItems: 'flex-start', gap: 12 }}>
             <BookCover book={book} size="lg" />

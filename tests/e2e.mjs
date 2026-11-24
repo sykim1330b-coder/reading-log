@@ -20,7 +20,8 @@ const context = await browser.newContext({ viewport: { width: 390, height: 844 }
 const page = await context.newPage();
 const errors = [];
 page.on('pageerror', (e) => errors.push(e.message));
-page.on('console', (m) => m.type() === 'error' && errors.push(m.text()));
+// 틀린 키 시험에서 나오는 401 응답 로그는 예상된 것이므로 제외합니다.
+page.on('console', (m) => m.type() === 'error' && !m.text().includes('status of 401') && errors.push(m.text()));
 
 // 가짜 카메라: 캔버스에 바코드를 그린 스트림을 돌려줍니다.
 await page.addInitScript((src) => {
@@ -52,12 +53,29 @@ await page.addInitScript((src) => {
 
 // 외부 조회는 고정 응답으로 대체합니다.
 await page.route('https://www.googleapis.com/**', (r) =>
-  r.fulfill({
+  !r.request().url().includes(ISBN) ? r.fulfill({ contentType: 'application/json', body: '{"totalItems":0}' }) : r.fulfill({
     contentType: 'application/json',
     body: JSON.stringify({ totalItems: 1, items: [{ volumeInfo: { title: 'Fantastic Mr Fox', authors: ['Roald Dahl'], publisher: 'Puffin' } }] }),
   }),
 );
 await page.route('https://openlibrary.org/**', (r) => r.fulfill({ contentType: 'application/json', body: '{}' }));
+// 카카오: 올바른 키(test-key)일 때만 데미안을 돌려줍니다. 국립중앙도서관: 키 오류.
+await page.route('https://dapi.kakao.com/**', (r) =>
+  r.request().headers().authorization === 'KakaoAK test-key'
+    ? r.fulfill({
+        contentType: 'application/json',
+        headers: { 'Access-Control-Allow-Origin': '*' },
+        body: JSON.stringify({ documents: [{ title: '데미안', authors: ['헤르만 헤세'], publisher: '민음사', thumbnail: '' }] }),
+      })
+    : r.fulfill({ status: 401, contentType: 'application/json', headers: { 'Access-Control-Allow-Origin': '*' }, body: '{}' }),
+);
+await page.route('https://www.nl.go.kr/**', (r) =>
+  r.fulfill({
+    contentType: 'application/json',
+    headers: { 'Access-Control-Allow-Origin': '*' },
+    body: JSON.stringify({ RESULT: 'ERROR', ERR_MESSAGE: '유효하지 않은 인증키 값입니다.' }),
+  }),
+);
 
 const sheet = page.locator('.sheet');
 const shot = async (name) => SHOTS && page.screenshot({ path: `${SHOTS}/${name}.png` });
@@ -194,8 +212,10 @@ await page.getByRole('button', { name: '바코드 스캔' }).click();
 await page.getByText('새 책 등록').waitFor({ timeout: 15000 });
 if ((await page.getByText(`ISBN ${KO_ISBN}`).count()) !== 1) throw new Error('사진 인식 ISBN 불일치');
 if ((await sheet.getByRole('button', { name: '한글책' }).getAttribute('aria-pressed')) !== 'true') throw new Error('978-89 책은 한글책 기본');
+await page.getByText('설정에서 카카오 API 키를 넣어주세요').waitFor();
+await page.getByRole('link', { name: /네이버에서 ISBN 검색/ }).waitFor();
 await page.getByRole('button', { name: '닫기' }).click();
-step('사진으로 인식 → 한글책 기본 선택');
+step('사진으로 인식 → 한글책 기본 선택, 키 없을 때 안내·검색 버튼');
 
 // 바코드가 없는 사진 → 안내 후 다시 시도 가능
 await page.getByRole('button', { name: '바코드 스캔' }).click();
@@ -222,7 +242,7 @@ step('새로고침 후 데이터 유지');
 await page.evaluate(() => (window.__noBarcode = true));
 await page.getByRole('button', { name: '바코드 스캔' }).click();
 await page.getByLabel('ISBN 직접 입력').fill('1234567890123');
-await page.getByRole('button', { name: '확인' }).click();
+await page.getByRole('button', { name: '확인', exact: true }).click();
 await page.getByText('올바른 ISBN이 아닙니다').waitFor();
 step('잘못된 ISBN 안내');
 
@@ -245,6 +265,26 @@ if (!switched || remembered !== switched) throw new Error(`카메라 기억 실�
 await shot('09-scanner-tools');
 await page.getByRole('button', { name: '닫기' }).click();
 step(`4K 우선 요청·해상도 표시·카메라 전환(${switched}) 기억`);
+
+// 한글책: 설정에서 카카오 키 입력 → 연결 확인 → 한글책 조회
+await page.locator('a.nav-item', { hasText: '설정' }).click();
+await page.getByLabel('카카오 REST API 키 (추천)').fill('wrong');
+await page.getByRole('button', { name: '저장하고 연결 확인' }).click();
+await page.getByText('카카오 키가 올바르지 않습니다').waitFor();
+await page.getByLabel('카카오 REST API 키 (추천)').fill('test-key');
+await page.getByLabel(/국립중앙도서관 인증키/).fill('bad');
+await page.getByRole('button', { name: '저장하고 연결 확인' }).click();
+await page.getByText('✅ 카카오 연결됨 (시험 조회: 데미안)').waitFor();
+await page.getByText('국립중앙도서관: 유효하지 않은 인증키 값입니다.').waitFor();
+await shot('10-key-settings');
+await page.evaluate(() => (window.__noBarcode = true));
+await page.getByRole('button', { name: '바코드 스캔' }).click();
+await page.getByLabel('ISBN 직접 입력').fill('9788937460449');
+await page.getByRole('button', { name: '확인', exact: true }).click();
+await page.getByText('카카오에서 책 정보를 가져왔습니다').waitFor();
+if ((await page.getByLabel('제목 *').inputValue()) !== '데미안') throw new Error('한글책 제목 조회 실패');
+await page.getByRole('button', { name: '닫기' }).click();
+step('카카오 키 확인(틀린 키/맞는 키) → 한글책 자동 조회');
 
 if (errors.length) throw new Error('콘솔 오류:\n' + errors.join('\n'));
 console.log('ALL PASSED');

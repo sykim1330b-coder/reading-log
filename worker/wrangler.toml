@@ -1,7 +1,0 @@
-name = "book-lookup"
-main = "index.js"
-compatibility_date = "2025-06-01"
-
-[vars]
-# 앱 주소(GitHub Pages)를 넣으세요. 예: "https://sykim1330b-coder.github.io"
-ALLOWED_ORIGINS = "https://sykim1330b-coder.github.io"

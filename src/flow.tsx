@@ -72,8 +72,11 @@ export function FlowProvider({ children }: { children: ReactNode }) {
         return true;
       }
       setSheet({ kind: 'loading', isbn });
-      const workerUrl = await getSetting<string>(SETTING.lookupUrl, '');
-      const found = await lookupIsbn(isbn, { workerUrl: workerUrl || undefined });
+      const [kakaoKey, nlKey] = await Promise.all([
+        getSetting<string>(SETTING.kakaoKey, ''),
+        getSetting<string>(SETTING.nlKey, ''),
+      ]);
+      const found = await lookupIsbn(isbn, { kakaoKey: kakaoKey || undefined, nlKey: nlKey || undefined });
       const lang = isKoreanPublisher(isbn) ? 'ko' : 'en';
       const next: Sheet = found
         ? {
@@ -93,7 +96,10 @@ export function FlowProvider({ children }: { children: ReactNode }) {
         : {
             kind: 'bookForm',
             thenLog: true,
-            notice: '책 정보를 찾지 못했습니다. 제목을 직접 입력해 주세요.',
+            notice:
+              lang === 'ko' && !kakaoKey && !nlKey
+                ? '한글책 정보를 찾으려면 설정에서 카카오 API 키를 넣어주세요. 지금은 제목을 직접 입력하거나 아래 검색 버튼을 이용하세요.'
+                : '책 정보를 찾지 못했습니다. 제목을 직접 입력하거나 아래 검색 버튼을 이용하세요.',
             draft: emptyBook({ isbn, lang }),
           };
       // 조회 중에 사용자가 창을 닫았다면 결과를 띄우지 않습니다.

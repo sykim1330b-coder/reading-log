@@ -35,7 +35,8 @@ export async function setSetting(key: string, value: unknown): Promise<void> {
 }
 
 export const SETTING = {
-  lookupUrl: 'lookupUrl',
+  kakaoKey: 'kakaoKey',
+  nlKey: 'nlKey',
   lastBackupAt: 'lastBackupAt',
   activeChildId: 'activeChildId',
 } as const;

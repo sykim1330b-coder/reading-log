@@ -10,10 +10,10 @@
   - Android Chrome은 폰 내장 인식기, iPhone 등은 zxing-cpp(WebAssembly) 사용. 1080p·연속 초점, 지원 폰은 2배 확대·플래시
   - **사진으로 인식**: 폰 기본 카메라로 찍은 사진에서 인식(초점이 잘 안 맞는 폰에 유용)
   - 카메라를 쓸 수 없으면 ISBN 직접 입력
-- **책 정보 자동 조회**: 조회 서버(선택) → Google Books → Open Library 순서로 찾고, 못 찾으면 직접 입력
+- **책 정보 자동 조회**: 카카오·국립중앙도서관(설정에 키를 넣은 경우) → Google Books → Open Library 순서로 찾고, 못 찾으면 네이버/구글 검색 버튼과 직접 입력
 - **책 등록**: 영어/한글 구분, 시리즈, 유형, 소장 구분, 등급
   - 영어책: AR, Lexile, 우리집 단계 (AR·Lexile 사이트를 ISBN 복사와 함께 열어주는 버튼)
-  - 한글책: 권장 학년·연령, 우리집 단계, ISBN 부가기호로 독자대상(아동·청소년 등) 자동 표시(조회 서버 사용 시)
+  - 한글책: 권장 학년·연령, 우리집 단계, ISBN 부가기호로 독자대상(아동·청소년 등) 자동 표시(국립중앙도서관 키 사용 시)
 - **바코드 없는 자료**(DVD·음원·오래된 책) 직접 등록
 - **활동 기록**: 날짜, 아이(여러 명 동시), 활동 유형, 시간(분), 횟수, 반응(😍🙂😑), 메모
   - 이미 등록된 책을 찍으면 바로 기록 화면이 뜨고, 직전 기록의 활동·시간이 미리 선택됨
@@ -58,25 +58,19 @@ NODE_PATH=$(npm root -g) node tests/e2e.mjs
 
 이후 `main` 브랜치가 바뀔 때마다 테스트·빌드 후 GitHub Pages에 자동으로 올라갑니다(Actions 탭에서 진행 상황 확인).
 
-## 한글책 조회 서버 (선택, 무료)
+## 한글책 정보 조회 (API 키, 무료)
 
-Google Books·Open Library는 키 없이 쓸 수 있지만 한글책 정보가 부족합니다.
-국립중앙도서관(부가기호 포함)과 카카오 책검색을 쓰려면 `worker/`의 Cloudflare Worker를 배포합니다.
-API 키는 Worker 안에만 보관되고, 독서기록 데이터는 Worker로 전송되지 않습니다(ISBN만 보냄).
+키가 없으면 Google Books·Open Library에서만 찾아 한글책은 대부분 나오지 않습니다.
+앱의 **설정 → 한글책 정보 조회**에 키를 넣으면 폰에서 바로 아래 API를 호출합니다(서버 불필요).
+키는 그 폰에만 저장되고 저장소·백업 파일에는 들어가지 않습니다.
 
-1. API 키 발급(무료)
-   - 국립중앙도서관 ISBN 서지정보: https://www.nl.go.kr/seoji/ → Open API → 인증키 신청
-   - 카카오: https://developers.kakao.com → 애플리케이션 추가 → REST API 키
-2. Cloudflare 계정을 만든 뒤:
-   ```bash
-   cd worker
-   npx wrangler login
-   npx wrangler secret put NL_CERT_KEY
-   npx wrangler secret put KAKAO_REST_KEY
-   npx wrangler deploy
-   ```
-   `wrangler.toml`의 `ALLOWED_ORIGINS`가 앱 주소의 origin(예: `https://sykim1330b-coder.github.io`)과 같아야 합니다.
-3. 앱의 **설정 → 책 정보 조회 서버**에 배포된 주소(`https://book-lookup.<계정>.workers.dev`)를 넣습니다.
+| API | 필요 여부 | 받는 곳 |
+|---|---|---|
+| 카카오 책검색 | **추천** (한글책 제목·저자·표지) | https://developers.kakao.com → 애플리케이션 추가 → REST API 키 |
+| 국립중앙도서관 ISBN 서지정보 | 선택 (부가기호 → 독자대상 표시) | https://www.nl.go.kr/seoji/ → Open API → 인증키 신청 |
+
+'저장하고 연결 확인'을 누르면 시험 조회로 키가 맞는지 알려줍니다.
+키 없이도 책 등록 화면의 **네이버/구글 ISBN 검색** 버튼으로 제목을 찾아 붙여넣을 수 있습니다.
 
 ## 구조
 
@@ -86,7 +80,6 @@ src/
   components/ Scanner(ZXing), BookFormSheet, LogFormSheet, ChildEditor, common
   pages/      Home, Logs, Books, BookDetail, Settings
   flow.tsx    스캔 → 조회 → 등록 → 기록 흐름과 시트 상태
-worker/       한글책 조회용 Cloudflare Worker (선택)
 tests/        단위 테스트(vitest), e2e.mjs(Playwright)
 ```
 
